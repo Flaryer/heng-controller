@@ -1,7 +1,9 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, InternalServerErrorException } from "@nestjs/common";
 import { ConfigService } from "src/config/config-module/config.service";
 import { createPool, Pool } from "generic-pool";
 import Redis from "ioredis";
+import { classToPlain, plainToClass } from "class-transformer";
+import { ClassType } from "class-transformer/ClassTransformer";
 
 @Injectable()
 export class RedisService {
@@ -63,5 +65,39 @@ export class RedisService {
         const res: T = await fun(client);
         await this.release(client);
         return res;
+    }
+
+    async hsetObj(key: string, field: string, obj: unknown): Promise<void> {
+        await this.client.hset(key, field, JSON.stringify(classToPlain(obj)));
+    }
+
+    async hgetObj<T>(
+        key: string,
+        field: string,
+        cls: ClassType<T>
+    ): Promise<T> {
+        const valStr = await this.client.hget(key, field);
+        if (valStr) {
+            const obj = JSON.parse(valStr);
+            return plainToClass(cls, obj);
+        } else {
+            throw new InternalServerErrorException("hgetObj 失败");
+        }
+    }
+
+    async hgetallObj<T>(
+        key: string,
+        cls: ClassType<T>
+    ): Promise<Record<string, T>> {
+        const vals = await this.client.hgetall(key);
+        const ret: { [key: string]: T } = {};
+        if (vals) {
+            for (const idx in vals) {
+                ret[idx] = plainToClass(cls, JSON.parse(vals[idx]));
+            }
+            return ret;
+        } else {
+            throw new InternalServerErrorException("hgetallObj 失败");
+        }
     }
 }

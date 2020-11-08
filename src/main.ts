@@ -5,7 +5,7 @@ import { Logger } from "@nestjs/common";
 
 async function bootstrap() {
     const app = await NestFactory.create(AppModule, {
-        logger: ["debug", "log", "warn", "error", "verbose"]
+        logger: [/*"debug",*/ "log", "warn", "error", "verbose"]
     });
 
     const configService = app.get(ConfigService);

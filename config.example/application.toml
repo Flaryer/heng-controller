@@ -11,3 +11,12 @@ maxRetriesPerRequest = 4
 [redis.pool]
 maxPoolSize = 10
 runCloseIdleConnMillis = 60000
+
+[judger]
+[judger.ws]
+port = 9000
+tokenExpire = 20000
+reportInterval = 1000
+lifeCheckInterval = 3000
+clearTokenInterval = 300000
+badTokenLifeTime = 300000
