@@ -10,6 +10,7 @@ import {
 import { ServerConfig } from "./server.config";
 import { ProfileBase } from "src/profile-processor/profile.base";
 import { RedisConfig } from "./redis.config";
+import { JudgerConfig } from "./judger.config";
 
 export const DEFAULT_CONFIG_PATHS = ["application.toml"];
 
@@ -48,4 +49,8 @@ export class Config extends ProfileBase {
     @ValidateNested()
     @Type(() => RedisConfig)
     public readonly redis!: RedisConfig;
+
+    @ValidateNested()
+    @Type(() => JudgerConfig)
+    public readonly judger!: JudgerConfig;
 }
