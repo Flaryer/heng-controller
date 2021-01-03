@@ -11,3 +11,11 @@ maxRetriesPerRequest = 4
 [redis.pool]
 maxPoolSize = 10
 runCloseIdleConnMillis = 60000
+
+[judger]
+webSocketPath = "/judger"
+tokenExpire = 5000
+msgQueueTimeoutSec = 10
+reportInterval = 3000
+lifeCheckInterval = 6000
+cleanTokenTimeout = 300000
