@@ -16,7 +16,7 @@ import {
     TransToWs,
     TokenStatus
 } from "./judger.decl";
-import { JudgeResult } from "./dto/http.dto";
+import { JudgeResult } from "./dto/http";
 
 @Injectable()
 export class TransformService {
@@ -56,7 +56,7 @@ export class TransformService {
             throw new InternalServerErrorException("Judger 不可用");
         }
         const transId: string = crypto.randomBytes(16).toString("hex");
-        await this.judgerGateway.sendJudgeRequest(wsId, taskId, transId);
+        await this.judgerGateway.callJudge(wsId, taskId, transId);
         await this.redisService.client
             .multi()
             .sadd(wsId + JudgerTransSuf, transId)

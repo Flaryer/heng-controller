@@ -18,29 +18,37 @@ import { JudgerConfig } from "src/config/judger.config";
 import { ConfigService } from "src/config/config-module/config.service";
 import {
     TokenStatus,
-    SendMessageListSuf,
+    SendMessageQueueSuf,
     SendCloseListSuf,
     WarnListSuf,
     AllReport,
     LifePing,
     AllToken,
     Token,
-    JudgerTransSuf
+    JudgerTransSuf,
+    CallRecordItem,
+    SendMessageQueueItem,
+    WsMessageRecordItem,
+    ResQueueSuf
 } from "./judger.decl";
 import { JudgerService } from "./judger.service";
 import {
-    DisconnectMessage,
-    ErrorMessage,
-    JudgeRequest,
-    JudgeRequestMessage,
-    MessageType,
-    ShutdownMessage,
-    StatusReportControlMessage,
-    StatusReportMessage
-} from "./dto/websocket.dto";
+    ControlArgs,
+    ExitArgs,
+    JudgeArgs,
+    JudgerArgs,
+    JudgerMethod,
+    Message,
+    Request,
+    Response,
+    ControllerMethod,
+    ControllerArgs,
+    LogArgs
+} from "./dto/ws";
 import moment from "moment";
 import { TransformService } from "./transform.service";
 import * as crypto from "crypto";
+import { ErrorInfo } from "./dto/http";
 
 @WebSocketGateway(undefined, {
     // 此处 path 不生效！检测 path 加在 handleConnection 里面了
@@ -50,6 +58,15 @@ export class JudgerGateway
     implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
     private readonly logger = new Logger("Gateway");
     private readonly judgerConfig: JudgerConfig;
+    private readonly callRecord = new Map<number, CallRecordItem>();
+    private readonly wsMsgRecord = new Map<string, WsMessageRecordItem>();
+    private readonly methods = new Map<
+        ControllerMethod,
+        (args: ControllerArgs) => Promise<unknown>
+    >();
+
+    private callSeq = 0;
+    // private wsSeq = 0;
 
     constructor(
         private readonly redisService: RedisService,
@@ -67,27 +84,55 @@ export class JudgerGateway
                 this.cleanToken(token);
             });
         });
+
+        this.methods.set("Log", async (args: LogArgs) => {
+            console.log(args.code);
+        });
+
+        setTimeout(async () => {
+            while (true) {
+                try {
+                    await this.redisService.withClient(async client => {
+                        const resTuple = await client.brpop(
+                            process.pid + SendMessageQueueSuf,
+                            this.judgerConfig.listenTimeoutSec
+                        );
+                        if (!resTuple) return;
+                        const res: Response = JSON.parse(resTuple[1]);
+                        const record = this.callRecord.get(res.seq);
+                        if (!record)
+                            throw new InternalServerErrorException(
+                                "callRecord 记录丢失"
+                            );
+                        record.cb(res.body);
+                    });
+                } catch (error) {
+                    this.logger.error(error);
+                }
+            }
+        }, 0);
     }
 
     async afterInit(server: WebSocket.Server): Promise<void> {
         this.logger.log("WebSocket 网关已启动");
+        //FIXME
         // 心跳检测
-        setInterval(async () => {
-            let mu = this.redisService.client.pipeline();
-            const ret = await this.redisService.client.hgetall(LifePing);
-            for (const token in ret) {
-                if (ret[token] !== "1") {
-                    await this.sendDisconnectMessage(
-                        token,
-                        MessageType.Error,
-                        "长时间未发生心跳"
-                    );
-                } else {
-                    mu = mu.hset(LifePing, token, "0");
-                }
-            }
-            await mu.exec();
-        }, this.judgerConfig.lifeCheckInterval);
+        // setInterval(async () => {
+        //     let mu = this.redisService.client.pipeline();
+        //     const ret = await this.redisService.client.hgetall(LifePing);
+        //     for (const token in ret) {
+        //         if (ret[token] !== "1") {
+        //             await this.sendDisconnectMessage(
+        //                 token,
+        //                 MessageType.Error,
+        //                 "长时间未发生心跳"
+        //             );
+        //         } else {
+        //             mu = mu.hset(LifePing, token, "0");
+        //         }
+        //     }
+        //     await mu.exec();
+        // }, this.judgerConfig.lifeCheckInterval);
     }
 
     async handleConnection(
@@ -121,14 +166,15 @@ export class JudgerGateway
             .exec();
 
         client.on("message", await this.getSolveMessage(client, token));
-        client.on("ping", await this.getSolvePing(client, token));
         client.on("close", await this.getSolveClose(client, token));
         client.on("error", await this.getSolveError(client, token));
 
-        this.listenMessageList(client, token);
-        this.listenCloseList(client, token);
-        this.sendReportControlMessage(token, this.judgerConfig.reportInterval);
-        await this.logWarn(token, "上线");
+        this.listenMessageQueue(client, token);
+        // this.listenCloseList(client, token);
+        this.callControl(token, {
+            statusReportInterval: this.judgerConfig.reportInterval
+        });
+        await this.log(token, "上线");
     }
 
     // 目前未使用
@@ -143,74 +189,39 @@ export class JudgerGateway
      * @param taskId
      * @param transId
      */
-    async sendJudgeRequest(
-        wsId: string,
-        taskId: string,
-        transId: string
-    ): Promise<void> {
-        const data: JudgeRequestMessage = {
-            type: MessageType.JudgeRequest,
-            body: await this.getJudgeRequestInfo(taskId)
-        };
-        data.body.taskId = transId;
-        await this.redisService.client.lpush(
-            wsId + SendMessageListSuf,
-            JSON.stringify(data)
-        );
+    async callJudge(wsId: string, taskId: string): Promise<void> {
+        const judgeInfo: JudgeArgs = await this.getJudgeRequestInfo(taskId);
+        await this.call(wsId, {
+            method: "Judge",
+            args: judgeInfo
+        });
     }
 
     /**
-     * 发送 ReportControlMessage 到 redis 消息队列
-     * 一般情况下无需手动调用
+     * 发送控制消息
      * @param wsId
      * @param reportInterval
      */
-    async sendReportControlMessage(
-        wsId: string,
-        reportInterval: number
-    ): Promise<void> {
-        const data: StatusReportControlMessage = {
-            type: MessageType.StatusReportControl,
-            body: {
-                setReportInterval: reportInterval,
-                immediate: true
-            }
-        };
-        await this.redisService.client.lpush(
-            wsId + SendMessageListSuf,
-            JSON.stringify(data)
-        );
+    async callControl(wsId: string, args: ControlArgs): Promise<void> {
+        await this.call(wsId, {
+            method: "Control",
+            args: args
+        });
     }
 
     /**
-     * 要求评测机关机
-     * 发送 ShutdownMessage 到 redis 消息队列
+     * 要求评测机下线
      * @param wsId
-     * @param reboot
-     * @param rebootDelay
-     * @param reason
+     * @param args
      */
-    async sendShutdownMessage(
-        wsId: string,
-        reboot: boolean,
-        reason?: string,
-        rebootDelay?: number
-    ): Promise<void> {
-        const data: ShutdownMessage = {
-            type: MessageType.Shutdown,
-            body: {
-                reboot: reboot,
-                rebootDelay: rebootDelay,
-                reason: reason
-            }
-        };
+    async callExit(wsId: string, args: ExitArgs): Promise<void> {
+        await this.call(wsId, {
+            method: "Exit",
+            args: args
+        });
         await this.removeJudger(wsId);
-        await this.redisService.client.lpush(
-            wsId + SendMessageListSuf,
-            JSON.stringify(data)
-        );
-        const e = `控制端请求评测机关机，原因：${reason}`;
-        this.logWarn(wsId, e);
+        const e = `控制端请求评测机关机，原因：${args.reason ?? "无"}`;
+        this.log(wsId, e);
     }
 
     /**
@@ -244,21 +255,32 @@ export class JudgerGateway
             JSON.stringify(data)
         );
         const e = `控制端请求断开连接，原因：${reason}`;
-        this.logWarn(wsId, e);
+        this.log(wsId, e);
     }
 
     //---------------------------外部交互[请填充]--------------------------
+    // TODO
     /**
      * 外部交互 please fill this
      * 获取 redis 中某任务的详细信息
      * @param taskId
      */
-    private async getJudgeRequestInfo(taskId: string): Promise<JudgeRequest> {
-        return { taskId: taskId } as JudgeRequest;
-        // return (await this.redisService.client.hget("Task", taskId)) as JudgeRequest;
+    private async getJudgeRequestInfo(taskId: string): Promise<JudgeArgs> {
+        const infoStr = await this.redisService.client.hget(
+            // FIXME
+            "key_judgeInfo",
+            taskId
+        );
+        if (!infoStr)
+            throw new InternalServerErrorException(
+                `taskId:${taskId} 找不到 JudgeInfo`
+            );
+        const info: JudgeArgs = JSON.parse(infoStr);
+        return info;
     }
 
     //---------------------------与评测机池交互[请填充]----------------------
+    // TODO
     /**
      * 通知评测机池移除评测机
      * 评测机池 please fill this
@@ -266,7 +288,7 @@ export class JudgerGateway
      */
     private async removeJudger(wsId: string): Promise<void> {
         // 以下顺序不可调换
-        this.logWarn(wsId, "已请求评测机池移除此评测机");
+        this.log(wsId, "已请求评测机池移除此评测机");
         await this.transformService.removeAllTrans(wsId);
         // await this.poolService.removeJudger(wsId);
     }
@@ -277,7 +299,7 @@ export class JudgerGateway
      * @param wsId
      */
     private async addJudger(wsId: string): Promise<void> {
-        this.logWarn(wsId, "已请求评测机池添加此评测机");
+        this.log(wsId, "已请求评测机池添加此评测机");
         // const judgerInfo = JSON.parse(
         //     await this.redisService.client.hget(AllToken, wsId)
         // ) as Token;
@@ -317,7 +339,7 @@ export class JudgerGateway
             )
             .sadd(TokenStatus.Unused, token)
             .exec();
-        this.logWarn(token, e);
+        this.log(token, e);
         this.logger.log(e);
         return token;
     }
@@ -355,38 +377,54 @@ export class JudgerGateway
      * @param ws
      * @param wsId
      */
-    async listenMessageList(ws: WebSocket, wsId: string): Promise<void> {
+    async listenMessageQueue(ws: WebSocket, wsId: string): Promise<void> {
+        let wsSeq = 0;
         while (ws && ws.readyState <= WebSocket.OPEN) {
-            await this.redisService.withClient(async client => {
-                const msg = await client.brpop(
-                    wsId + SendMessageListSuf,
-                    this.judgerConfig.msgQueueTimeoutSec
-                );
-                if (msg) ws.send(msg[1]);
-            });
+            try {
+                await this.redisService.withClient(async client => {
+                    const msgTuple = await client.brpop(
+                        wsId + SendMessageQueueSuf,
+                        this.judgerConfig.listenTimeoutSec
+                    );
+                    if (!msgTuple) return;
+                    const msg: SendMessageQueueItem = JSON.parse(msgTuple[1]);
+                    const seq = (wsSeq = wsSeq + 1);
+                    this.wsMsgRecord.set(wsId + seq, {
+                        pid: msg.pid,
+                        seq: msg.req.seq
+                    });
+                    msg.req.seq = seq;
+                    setTimeout(() => {
+                        this.wsMsgRecord.delete(wsId + seq);
+                    }, 60000);
+                    ws.send(JSON.stringify(msg.req));
+                });
+            } catch (error) {
+                this.logger.error(error);
+            }
         }
     }
 
+    // FIXME
     /**
      * 监听 close 消息队列
      * @param ws
      * @param wsId
      */
-    async listenCloseList(ws: WebSocket, wsId: string): Promise<void> {
-        while (ws && ws.readyState <= WebSocket.OPEN) {
-            await this.redisService.withClient(async client => {
-                const msg = await client.brpop(
-                    wsId + SendCloseListSuf,
-                    this.judgerConfig.msgQueueTimeoutSec
-                );
-                if (msg) ws.close(1000, msg[1]);
-            });
-        }
-    }
+    // async listenCloseList(ws: WebSocket, wsId: string): Promise<void> {
+    //     while (ws && ws.readyState <= WebSocket.OPEN) {
+    //         await this.redisService.withClient(async client => {
+    //             const msg = await client.brpop(
+    //                 wsId + SendCloseListSuf,
+    //                 this.judgerConfig.msgQueueTimeoutSec
+    //             );
+    //             if (msg) ws.close(1000, msg[1]);
+    //         });
+    //     }
+    // }
 
     /**
      * 获取处理 message 事件的函数
-     * 目前只处理评测机的 ErrorMessage
      * @param ws
      * @param wsId
      */
@@ -395,21 +433,30 @@ export class JudgerGateway
         wsId: string
     ): Promise<(msg: string) => Promise<void>> {
         return async (msg: string): Promise<void> => {
-            let body: ErrorMessage;
+            let wsMsg: Message;
+            // try catch 可考虑移除
             try {
-                body = JSON.parse(msg);
+                wsMsg = JSON.parse(msg);
             } catch (error) {
                 const e = "解析 message 的 JSON 时出错";
-                await this.logWarn(wsId, e);
+                await this.log(wsId, e);
                 throw new InternalServerErrorException(e);
             }
-            if (body.type != MessageType.Error) {
-                const e = `发送了错误的 message 类型：${body.type}`;
-                await this.logWarn(wsId, e);
-                throw new InternalServerErrorException(e);
+            if (wsMsg.type === "res") {
+                const record = this.wsMsgRecord.get(wsId + wsMsg.seq);
+                if (!record) {
+                    const e = "wsMsgRecord 记录不存在";
+                    await this.log(wsId, e);
+                    throw new InternalServerErrorException(e);
+                }
+                wsMsg.seq = record.seq;
+                await this.redisService.client.lpush(
+                    record.pid + ResQueueSuf,
+                    JSON.stringify(wsMsg)
+                );
+            } else if (wsMsg.type === "req") {
+                //FIXME
             }
-            const e = `发生内部错误，错误代码：${body.body.code}，错误信息：${body.body.message}`;
-            await this.logWarn(wsId, e);
         };
     }
 
@@ -420,32 +467,32 @@ export class JudgerGateway
      * @param ws
      * @param wsId
      */
-    private async getSolvePing(
-        ws: WebSocket,
-        wsId: string
-    ): Promise<(data: Buffer) => Promise<void>> {
-        return async (data: Buffer): Promise<void> => {
-            await this.redisService.client.hset(LifePing, wsId, "1");
-            let body: StatusReportMessage;
-            try {
-                body = JSON.parse(data.toString("utf-8"));
-            } catch (error) {
-                const e = "解析 ping 的 JSON 时出错";
-                await this.logWarn(wsId, e);
-                throw new InternalServerErrorException(e);
-            }
-            if (body.type != MessageType.StatusReport) {
-                const e = `发送了错误的 ping 类型：${body.type}`;
-                await this.logWarn(wsId, e);
-                throw new InternalServerErrorException(e);
-            }
-            await this.redisService.client.hset(
-                AllReport,
-                wsId,
-                JSON.stringify(body)
-            );
-        };
-    }
+    // private async getSolvePing(
+    //     ws: WebSocket,
+    //     wsId: string
+    // ): Promise<(data: Buffer) => Promise<void>> {
+    //     return async (data: Buffer): Promise<void> => {
+    //         await this.redisService.client.hset(LifePing, wsId, "1");
+    //         let body: StatusReportMessage;
+    //         try {
+    //             body = JSON.parse(data.toString("utf-8"));
+    //         } catch (error) {
+    //             const e = "解析 ping 的 JSON 时出错";
+    //             await this.logWarn(wsId, e);
+    //             throw new InternalServerErrorException(e);
+    //         }
+    //         if (body.type != MessageType.StatusReport) {
+    //             const e = `发送了错误的 ping 类型：${body.type}`;
+    //             await this.logWarn(wsId, e);
+    //             throw new InternalServerErrorException(e);
+    //         }
+    //         await this.redisService.client.hset(
+    //             AllReport,
+    //             wsId,
+    //             JSON.stringify(body)
+    //         );
+    //     };
+    // }
 
     /**
      * 获取处理 close 事件的函数
@@ -464,7 +511,7 @@ export class JudgerGateway
                     body = JSON.parse(reason);
                 } catch (error) {
                     const e = "解析 close 的 JSON 时出错";
-                    await this.logWarn(wsId, e);
+                    await this.log(wsId, e);
                     throw new InternalServerErrorException(e);
                 }
                 e = `于 ${body.body.time ??
@@ -474,7 +521,7 @@ export class JudgerGateway
             } else {
                 e = "可能被强制关闭";
             }
-            await this.logWarn(wsId, e);
+            await this.log(wsId, e);
             await this.redisService.client
                 .multi()
                 .srem(TokenStatus.Online, wsId)
@@ -500,17 +547,18 @@ export class JudgerGateway
         return async (e: Error): Promise<void> => {
             const emsg = `触发 WebSocket 的 error 事件：${e}`;
             await this.sendDisconnectMessage(wsId, MessageType.Error, emsg);
-            await this.logWarn(wsId, emsg);
+            await this.log(wsId, emsg);
             await this.removeJudger(wsId);
         };
     }
 
     /**
      * 用于记录评测机的各种 log
+     * msg 不需要携带 wsId 和时间
      * @param wsId
      * @param msg
      */
-    private async logWarn(wsId: string, msg: string): Promise<void> {
+    private async log(wsId: string, msg: string): Promise<void> {
         await this.redisService.client.lpush(
             wsId + WarnListSuf,
             `${moment().format("YYYY-MM-DDTHH:mm:ssZ")} ${msg}`
@@ -528,7 +576,7 @@ export class JudgerGateway
             .hdel(AllToken, wsId)
             .hdel(LifePing, wsId)
             .hdel(AllReport, wsId)
-            .del(wsId + SendMessageListSuf)
+            .del(wsId + SendMessageQueueSuf)
             .del(wsId + SendCloseListSuf)
             .del(wsId + WarnListSuf)
             .del(wsId + JudgerTransSuf)
@@ -536,6 +584,53 @@ export class JudgerGateway
             .srem(TokenStatus.Online, wsId)
             .srem(TokenStatus.Closed, wsId)
             .exec();
+    }
+
+    call(
+        wsId: string,
+        body: { method: JudgerMethod; args: JudgerArgs },
+        timeout = 3000
+    ): Promise<unknown> {
+        return new Promise<unknown>((resolve, reject) => {
+            const seq = (this.callSeq = this.callSeq + 1);
+            const c: CallRecordItem = {
+                cb: (body: { output?: unknown; error?: ErrorInfo }) => {
+                    if (body.error) {
+                        reject(
+                            new Error(
+                                `code: ${body.error.code}, message: ${body.error.message}`
+                            )
+                        );
+                    }
+                    if (body.output) {
+                        resolve(body.output);
+                    }
+                    reject(new Error("Empty Response"));
+                    const ctx = this.callRecord.get(seq);
+                    if (ctx) clearTimeout(ctx.timer);
+                    this.callRecord.delete(seq);
+                },
+                timer: setTimeout(() => {
+                    reject(new Error("Timeout"));
+                    this.callRecord.delete(seq);
+                }, timeout)
+            };
+            this.callRecord.set(seq, c);
+            const req: Request<JudgerMethod, JudgerArgs> = {
+                type: "req",
+                time: moment().format("YYYY-MM-DDTHH:mm:ssZ"),
+                seq: seq,
+                body: body
+            };
+            const reqMsg: SendMessageQueueItem = {
+                pid: process.pid,
+                req: req
+            };
+            this.redisService.client.lpush(
+                wsId + SendMessageQueueSuf,
+                JSON.stringify(reqMsg)
+            );
+        });
     }
 }
 /**

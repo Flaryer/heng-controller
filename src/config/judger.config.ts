@@ -14,7 +14,7 @@ export class JudgerConfig {
 
     // s
     @IsNumber()
-    msgQueueTimeoutSec!: number;
+    listenTimeoutSec!: number;
 
     // ms
     @IsNumber()

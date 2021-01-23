@@ -16,7 +16,7 @@ import {
     ErrorResponse,
     JudgeResult,
     ResponseType
-} from "./dto/http.dto";
+} from "./dto/http";
 import { GetToken } from "./dto/judger.dto";
 import { JudgerService } from "./judger.service";
 import crypto from "crypto";
