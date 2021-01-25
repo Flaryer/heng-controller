@@ -84,8 +84,8 @@ export type ReportStatusResponse = Response<null>;
 
 // ------------------------------------------------------------------
 export type UpdateJudgesArgs = {
-    id: string;
-    state: JudgeState;
+id: string;
+state: JudgeState;
 }[];
 
 export type UpdateJudgesRequest = Request<"UpdateJudges", UpdateJudgesArgs>;

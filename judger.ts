@@ -2,8 +2,8 @@ import WebSocket from "ws";
 import axios, { AxiosResponse } from "axios";
 import crypto from "crypto";
 
-let status: { transId: string; state: string }[] = [];
-let result: { transId: string; result: any }[] = [];
+let status: { id: string; state: string }[] = [];
+let result: { id: string; result: any }[] = [];
 
 axios
     .get("http://127.0.0.1:8080/judger/token", {
@@ -13,13 +13,22 @@ axios
         }
     })
     .then((e: AxiosResponse) => {
-        console.log(e.data["body"]["token"]);
+        console.log(e.data["token"]);
         const ws = new WebSocket(
-            `http://127.0.0.1:8080/judger?token=${e.data["body"]["token"]}`
+            `http://127.0.0.1:8080/judger?token=${e.data["token"]}`
         );
         ws.on("open", function open() {
             setInterval(() => {
-                ws.ping(`{ "type": 18,"body":{"hardware":{"cpu":1}} }`);
+                ws.send(
+                    JSON.stringify({
+                        type: "req",
+                        seq: 1,
+                        body: {
+                            method: "ReportStatus",
+                            args: { cpu: 100 }
+                        }
+                    })
+                );
             }, 1000);
         });
         ws.on("error", e => {
@@ -30,15 +39,17 @@ axios
             console.log(e, r);
             process.exit();
         });
-        ws.on("message", (data: string) => {
-            console.log(data);
-            const transId = JSON.parse(data)["body"]["taskId"];
-            if (JSON.parse(data)["type"] == 33)
+        ws.on("message", (s: string) => {
+            const data = JSON.parse(s);
+            console.log(s);
+            if (data.type === "res") return;
+            if (data.body.method == "Judge") {
+                const id = data.body.args.id;
                 setTimeout(async () => {
-                    status.push({ transId, state: "Judging" });
+                    status.push({ id, state: "Judging" });
                     setTimeout(async () => {
                         result.push({
-                            transId: transId,
+                            id,
                             result: {
                                 result: {
                                     res: "ac"
@@ -47,23 +58,44 @@ axios
                         });
                     }, 100);
                 }, 1000);
+            }
+            ws.send(
+                JSON.stringify({
+                    seq: data.seq,
+                    type: "res",
+                    body: { output: null }
+                })
+            );
         });
+        setInterval(() => {
+            if (JSON.stringify(status) !== "[]") {
+                ws.send(
+                    JSON.stringify({
+                        seq: 100,
+                        type: "req",
+                        body: {
+                            method: "UpdateJudges",
+                            args: Array.from(status)
+                        }
+                    })
+                );
+                status = [];
+            }
+        }, 1000);
+
+        setInterval(() => {
+            if (JSON.stringify(result) !== "[]") {
+                ws.send(
+                    JSON.stringify({
+                        seq: 100,
+                        type: "req",
+                        body: {
+                            method: "FinishJudges",
+                            args: Array.from(result)
+                        }
+                    })
+                );
+                result = [];
+            }
+        }, 1000);
     });
-
-setInterval(() => {
-    if (JSON.stringify(status) !== "[]") {
-        axios.put(`http://127.0.0.1:8080/judger/status`, {
-            body: Array.from(status)
-        });
-        status = [];
-    }
-}, 1000);
-
-setInterval(() => {
-    if (JSON.stringify(result) !== "[]") {
-        axios.post(`http://127.0.0.1:8080/judger/result`, {
-            body: Array.from(result)
-        });
-        result = [];
-    }
-}, 1000);

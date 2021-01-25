@@ -14,6 +14,7 @@ export class JudgerConfig {
 
     // s
     @IsNumber()
+    @IsPositive()
     listenTimeoutSec!: number;
 
     // ms
@@ -29,5 +30,20 @@ export class JudgerConfig {
     // ms
     @IsNumber()
     @IsPositive()
-    cleanTokenTimeout!: number;
+    tokenGcInterval!: number;
+
+    // ms
+    @IsNumber()
+    @IsPositive()
+    tokenGcExpire!: number;
+
+    // ms
+    @IsNumber()
+    @IsPositive()
+    processPingInterval!: number;
+
+    // ms
+    @IsNumber()
+    @IsPositive()
+    processCheckInterval!: number;
 }

@@ -4,12 +4,11 @@ import { RedisModule } from "src/redis/redis.module";
 import { JudgerController } from "./judger.controller";
 import { JudgerGateway } from "./judger.gateway";
 import { JudgerService } from "./judger.service";
-import { TransformService } from "./transform.service";
 
 @Module({
     imports: [RedisModule, ConfigModule],
-    providers: [JudgerGateway, JudgerService, TransformService],
+    providers: [JudgerGateway, JudgerService],
     controllers: [JudgerController],
-    exports: [TransformService, JudgerGateway]
+    exports: [JudgerGateway]
 })
 export class JudgerModule {}

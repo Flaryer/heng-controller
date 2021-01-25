@@ -2,23 +2,20 @@ import { ErrorInfo } from "./dto/http";
 import { JudgerMethod, Request } from "./dto/ws";
 
 // keyNames in redis
-export const SendMessageQueueSuf = ":ws_meaaage"; // list
-export const ResQueueSuf = ":process_res"; // list
+export const SendMessageQueueSuf = ":WsPendingMeaaage"; // list
+export const ResQueueSuf = ":ProcessRes"; // list
 
+export const ProcessLife = "ProcessLife"; // hash
+export const ProcessOwnWsSuf = ":ProcessWs"; // set
 
 export const AllToken = "AllToken"; // hash
 export const LifePing = "LifePing"; // hash
 export const AllReport = "JudgerReport"; // hash
-export const SendCloseListSuf = ":close"; // list
-export const WarnListSuf = ":warn"; // list
-export const JudgerTransSuf = ":trans"; // set
-export const TransToTask = "TransToTask"; // hash
-export const TransToWs = "TransToWs"; // hash
-export enum TokenStatus {
-    Unused = "UnusedToken",
-    Online = "OnlineToken",
-    Closed = "ClosedToken"
-} // 3 * set
+export const JudgerLogSuf = ":JudgerLog"; // list
+export const UnusedToken = "UnusedToken"; // hash
+export const OnlineToken = "OnlineToken"; // hash
+export const DisabledToken = "DisablesToken"; // hash
+export const ClosedToken = "ClosedToken"; // hash
 
 export class Token {
     maxTaskCount!: number;
@@ -29,14 +26,10 @@ export class Token {
     createTime!: string;
 }
 
-// export interface Message {
-//     close: boolean;
-//     msg: string;
-// }
-
 export interface SendMessageQueueItem {
     pid: number;
     req: Request<JudgerMethod>;
+    closeReason?: string;
 }
 
 export interface CallRecordItem {
@@ -44,7 +37,7 @@ export interface CallRecordItem {
     timer: NodeJS.Timeout;
 }
 
-export interface WsMessageRecordItem {
+export interface WsResRecordItem {
     pid: number;
     seq: number;
 }
