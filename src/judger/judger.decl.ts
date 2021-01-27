@@ -7,6 +7,7 @@ export const ResQueueSuf = ":ProcessRes"; // list
 
 export const ProcessLife = "ProcessLife"; // hash
 export const ProcessOwnWsSuf = ":ProcessWs"; // set
+export const WsOwnTaskSuf = ":WsTask"; // set
 
 export const AllToken = "AllToken"; // hash
 // export const LifePing = "LifePing"; // hash

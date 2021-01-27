@@ -61,7 +61,7 @@ export class JudgerController {
     ): Promise<void> {
         allRequest.forEach(async r => {
             this.logger.debug(`为评测机 ${r.wsId} 分发任务 ${r.taskId}`);
-            return await this.judgerGateway.distributTask(r.wsId, r.taskId);
+            return await this.judgerGateway.distributeTask(r.wsId, r.taskId);
         });
     }
 
@@ -72,7 +72,7 @@ export class JudgerController {
         @Param("wsId") wsId: string
     ): Promise<void> {
         this.logger.debug(`为评测机 ${wsId} 分发任务 ${taskId}`);
-        return await this.judgerGateway.distributTask(wsId, taskId);
+        return await this.judgerGateway.distributeTask(wsId, taskId);
     }
 
     // 测试 Exit

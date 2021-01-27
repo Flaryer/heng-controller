@@ -1,7 +1,6 @@
 import { Logger } from "@nestjs/common";
 import {
     OnGatewayConnection,
-    OnGatewayDisconnect,
     OnGatewayInit,
     WebSocketGateway
 } from "@nestjs/websockets";
@@ -26,7 +25,8 @@ import {
     DisabledToken,
     ClosedToken,
     ProcessOwnWsSuf,
-    ProcessLife
+    ProcessLife,
+    WsOwnTaskSuf
 } from "./judger.decl";
 import { JudgerService } from "./judger.service";
 import {
@@ -50,11 +50,10 @@ import { ErrorInfo } from "./dto/http";
 import { setInterval } from "timers";
 
 @WebSocketGateway(undefined, {
-    // 此处 path 不生效！检测 path 加在 handleConnection 里面了
+    // 此处 path 不生效！检测 path 加在 handleConnection 里面
     path: "/judger/websocket"
 })
-export class JudgerGateway
-    implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
     private readonly logger = new Logger("Gateway");
     private readonly judgerConfig: JudgerConfig;
     private readonly callRecord = new Map<number, CallRecordItem>();
@@ -63,7 +62,7 @@ export class JudgerGateway
         ControllerMethod,
         (ws: WebSocket, wsId: string, args: any) => Promise<unknown>
     >();
-    private readonly ownTasks = new Map<string, Set<string>>();
+    // private readonly wsOwnTasks = new Map<string, Set<string>>();
     private readonly WsLifeRecord = new Map<string, number>();
 
     private callSeq = 0;
@@ -120,11 +119,15 @@ export class JudgerGateway
         this.methods.set(
             "UpdateJudges",
             async (ws: WebSocket, wsId: string, args: UpdateJudgesArgs) => {
-                const allTask = this.ownTasks.get(wsId);
-                if (!allTask) throw new Error("评测机失效");
-                const vaildResult = args.filter(async ({ id }) => {
-                    return allTask.has(id);
+                let mu = this.redisService.client.multi();
+                args.forEach(({ id }) => {
+                    mu = mu.sismember(wsId + WsOwnTaskSuf, id);
                 });
+                const ret: number[] = (await mu.exec()).map(value => value[1]);
+                const vaildResult = args.filter(({}, index) => ret[index]);
+                // FIXME 留作 DEBUG，一般出现此错误说明有 BUG
+                if (args.length > vaildResult.length)
+                    this.log(wsId, "回报无效任务");
                 // TODO 通知外部系统
             }
         );
@@ -132,17 +135,24 @@ export class JudgerGateway
         this.methods.set(
             "FinishJudges",
             async (ws: WebSocket, wsId: string, args: FinishJudgesArgs) => {
-                const allTask = this.ownTasks.get(wsId);
-                if (!allTask) throw new Error("评测机失效");
-                const vaildResult = args.filter(({ id }) => allTask.has(id));
+                let mu = this.redisService.client.multi();
+                args.forEach(({ id }) => {
+                    mu = mu.sismember(wsId + WsOwnTaskSuf, id);
+                });
+                const ret: number[] = (await mu.exec()).map(value => value[1]);
+                const vaildResult = args.filter(({}, index) => ret[index]);
+                // FIXME 留作 DEBUG，一般出现此错误说明有 BUG
+                if (args.length > vaildResult.length)
+                    this.log(wsId, "回报无效任务");
+
                 // TODO 通知外部系统
+
+                mu = this.redisService.client.multi();
                 for (const { id } of vaildResult) {
-                    allTask.delete(id);
+                    mu = mu.srem(wsId + WsOwnTaskSuf, id);
                 }
-                await this.releaseJudger(
-                    wsId,
-                    vaildResult.map(({ id }) => id)
-                );
+                await mu.exec();
+                await this.releaseJudger(wsId, vaildResult.length);
             }
         );
 
@@ -212,6 +222,7 @@ export class JudgerGateway
         }, Math.random() * this.judgerConfig.tokenGcInterval);
 
         // 其他进程存活检测
+        // 删除 token 记录
         setTimeout(() => {
             setInterval(async () => {
                 const ret = await this.redisService.client.hgetall(ProcessLife);
@@ -231,6 +242,7 @@ export class JudgerGateway
                                 .hdel(OnlineToken, token)
                                 .hdel(DisabledToken, token)
                                 .hset(ClosedToken, token, Date.now());
+                            await this.releaseWsAllTask(token);
                         }
                         mu.del(pid + ProcessOwnWsSuf)
                             .hdel(ProcessLife, pid)
@@ -292,12 +304,26 @@ export class JudgerGateway
         await this.callControl(token, {
             statusReportInterval: this.judgerConfig.reportInterval
         });
+
+        // FIXME 粗暴的压测
+        // const timer = setInterval(() => {
+        //     if (client.readyState === WebSocket.OPEN) {
+        //         this.distributeTask(
+        //             token,
+        //             Math.random()
+        //                 .toString(35)
+        //                 .slice(2)
+        //         );
+        //     } else {
+        //         clearInterval(timer);
+        //     }
+        // }, 10);
     }
 
     // 目前未使用
-    handleDisconnect(client: WebSocket): void {
-        // this.logger.warn("out");
-    }
+    // handleDisconnect(client: WebSocket): void {
+    // ...
+    // }
 
     //------------------------ws/评测机连接 [可调用]-------------------------------
     /**
@@ -337,7 +363,7 @@ export class JudgerGateway
             args: args
         });
         await this.removeJudger(wsId);
-        const e = `控制端请求评测机离线，原因：${args.reason ?? "无"}`;
+        const e = `控制端请求评测机下线，原因：${args.reason ?? "无"}`;
         await this.log(wsId, e);
     }
 
@@ -365,6 +391,7 @@ export class JudgerGateway
     }
 
     //---------------------------外部交互[请填充]--------------------------
+    // TODO
     /**
      * 外部交互 please fill this
      * 获取 redis 中某任务的详细信息
@@ -380,21 +407,22 @@ export class JudgerGateway
         // if (!infoStr) throw new Error(`taskId:${taskId} 找不到 JudgeInfo`);
         // const info: JudgeArgs = JSON.parse(infoStr);
         // return info;
-        return {} as JudgeArgs;
+        return { id: taskId } as JudgeArgs;
     }
 
     //---------------------------与评测机池交互[请填充]----------------------
-    async distributTask(wsId: string, taskId: string): Promise<void> {
+    // TODO
+    /**
+     * 为评测机分配任务
+     * @param wsId
+     * @param taskId
+     */
+    async distributeTask(wsId: string, taskId: string): Promise<void> {
         if (!(await this.redisService.client.hexists(OnlineToken, wsId))) {
             throw new Error("Judger 不可用");
         }
         await this.callJudge(wsId, taskId);
-        let allTask = this.ownTasks.get(wsId);
-        if (!allTask) {
-            allTask = new Set<string>();
-            allTask.add(taskId);
-            this.ownTasks.set(wsId, allTask);
-        } else allTask.add(taskId);
+        await this.redisService.client.sadd(wsId + WsOwnTaskSuf, taskId);
     }
 
     /**
@@ -403,7 +431,6 @@ export class JudgerGateway
      * @param wsId
      */
     private async removeJudger(wsId: string): Promise<void> {
-        // 以下顺序不可调换
         await this.log(wsId, "已请求评测机池移除此评测机");
         await this.redisService.client
             .multi()
@@ -432,11 +459,28 @@ export class JudgerGateway
      * 评测机池 please fill this
      * @param wsId
      */
-    private async releaseJudger(wsId: string, taskId: string[]): Promise<void> {
+    private async releaseJudger(wsId: string, capacity: number): Promise<void> {
         this.logger.debug(
-            `已请求评测机池释放评测机 ${wsId.split(".")[0]} 的算力`
+            `已请求评测机池释放评测机 ${
+                wsId.split(".")[0]
+            } 的 ${capacity} 份算力`
         );
         //......
+    }
+
+    /**
+     * 重新分配评测机的所有任务
+     * 仅用于评测机已经失效的情况下
+     * @param wsId
+     */
+    private async releaseWsAllTask(wsId: string) {
+        const allTask = await this.redisService.client.smembers(
+            wsId + WsOwnTaskSuf
+        );
+        this.log(wsId, `重新分配 ${allTask.length} 个任务`);
+        // TODO 重新加入任务队列
+
+        await this.redisService.client.del(wsId + WsOwnTaskSuf);
     }
 
     //---------------------------token------------------------------------
@@ -497,7 +541,7 @@ export class JudgerGateway
         return true;
     }
 
-    //----------------------------WebSocket 基础部分[不可外部调用]------------------
+    //----------------------------WebSocket-------------------------------
     /**
      * 监听消息队列
      * @param ws
@@ -616,11 +660,11 @@ export class JudgerGateway
         return async (code: number, reason: string): Promise<void> => {
             await this.removeJudger(wsId);
             const e = `评测机断开连接，原因：${
-                reason !== ""
-                    ? reason
-                    : code === 1000
-                    ? "无"
-                    : "评测机可能意外断开"
+                reason === ""
+                    ? code === 1000
+                        ? "无"
+                        : "评测机可能意外断开"
+                    : reason
             }`;
             await this.log(wsId, e);
             await this.redisService.client
@@ -631,7 +675,7 @@ export class JudgerGateway
                 .srem(process.pid + ProcessOwnWsSuf, wsId)
                 .exec();
             this.WsLifeRecord.delete(wsId);
-            this.ownTasks.delete(wsId);
+            await this.releaseWsAllTask(wsId);
         };
     }
 
@@ -683,6 +727,7 @@ export class JudgerGateway
             .hdel(ClosedToken, wsId)
             .exec();
         this.WsLifeRecord.delete(wsId);
+        await this.releaseWsAllTask(wsId);
     }
 
     call(
@@ -710,7 +755,6 @@ export class JudgerGateway
                     this.callRecord.delete(seq);
                 },
                 timer: setTimeout(() => {
-                    // resolve(null);
                     reject(new Error("Timeout"));
                     this.callRecord.delete(seq);
                 }, timeout)
@@ -733,9 +777,3 @@ export class JudgerGateway
         });
     }
 }
-/**
- * 连接后改状态，加心跳检测，通知评测机池
- * 触发 onclose 之后才改状态，删心跳检测，也通知评测机池
- * sendShutdown、sendDisconnect、onerror 通知评测机池
- * 综上，可能多次通知评测机池
- */
