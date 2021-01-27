@@ -127,7 +127,11 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
                 const vaildResult = args.filter(({}, index) => ret[index]);
                 // FIXME 留作 DEBUG，一般出现此错误说明有 BUG
                 if (args.length > vaildResult.length)
-                    this.log(wsId, "回报无效任务");
+                    this.log(
+                        wsId,
+                        `回报无效任务状态 ${args.length -
+                            vaildResult.length} 个`
+                    );
                 // TODO 通知外部系统
             }
         );
@@ -143,7 +147,11 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
                 const vaildResult = args.filter(({}, index) => ret[index]);
                 // FIXME 留作 DEBUG，一般出现此错误说明有 BUG
                 if (args.length > vaildResult.length)
-                    this.log(wsId, "回报无效任务");
+                    this.log(
+                        wsId,
+                        `回报无效任务结果 ${args.length -
+                            vaildResult.length} 个`
+                    );
 
                 // TODO 通知外部系统
 
@@ -294,7 +302,7 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
             client.on("error", this.getSolveError(client, token));
 
             setTimeout(this.getListenMessageQueue(client, token), 0);
-            await this.log(token, "上线");
+            await this.log(token, `上线，pid：${process.pid}`);
         } catch (error) {
             await this.log(token, error.message);
             client.close();
@@ -386,7 +394,7 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
             wsId + SendMessageQueueSuf,
             JSON.stringify(msg)
         );
-        const e = `控制端请求断开连接，原因：${reason}`;
+        const e = `控制端强制断开连接，原因：${reason}`;
         await this.log(wsId, e);
     }
 

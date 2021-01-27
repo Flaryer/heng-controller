@@ -9,7 +9,7 @@ port = 6379
 db = 0
 maxRetriesPerRequest = 4
 [redis.pool]
-minPoolSize=10
+minPoolSize = 10
 maxPoolSize = 100
 runCloseIdleConnMillis = 60000
 
