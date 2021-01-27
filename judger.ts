@@ -6,7 +6,7 @@ let status: { id: string; state: string }[] = [];
 let result: { id: string; result: any }[] = [];
 
 axios
-    .get("http://127.0.0.1:8080/judger/token", {
+    .get("http://127.0.0.1:8080/v1/judger/token", {
         data: {
             maxTaskCount: 10,
             name: "judger" + crypto.randomBytes(2).toString("hex")
@@ -15,7 +15,7 @@ axios
     .then((e: AxiosResponse) => {
         console.log(e.data["token"]);
         const ws = new WebSocket(
-            `http://127.0.0.1:8080/judger?token=${e.data["token"]}`
+            `http://127.0.0.1:8080/v1/judger/websocket?token=${e.data["token"]}`
         );
         ws.on("open", function open() {
             setInterval(() => {
@@ -40,8 +40,8 @@ axios
             process.exit();
         });
         ws.on("message", (s: string) => {
-            const data = JSON.parse(s);
             console.log(s);
+            const data = JSON.parse(s);
             if (data.type === "res") return;
             if (data.body.method == "Judge") {
                 const id = data.body.args.id;

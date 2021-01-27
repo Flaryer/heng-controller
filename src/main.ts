@@ -13,6 +13,7 @@ async function bootstrap() {
     const { port, hostname } = configService.getServerConfig();
     const logger = new Logger("bootstrap");
 
+    app.setGlobalPrefix("/v1");
     await app.listen(port, hostname);
     logger.log(`服务端已启动,于 ${hostname}:${port}`);
 }

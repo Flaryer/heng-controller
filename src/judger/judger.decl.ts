@@ -9,7 +9,7 @@ export const ProcessLife = "ProcessLife"; // hash
 export const ProcessOwnWsSuf = ":ProcessWs"; // set
 
 export const AllToken = "AllToken"; // hash
-export const LifePing = "LifePing"; // hash
+// export const LifePing = "LifePing"; // hash
 export const AllReport = "JudgerReport"; // hash
 export const JudgerLogSuf = ":JudgerLog"; // list
 export const UnusedToken = "UnusedToken"; // hash

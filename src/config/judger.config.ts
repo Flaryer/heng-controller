@@ -46,4 +46,9 @@ export class JudgerConfig {
     @IsNumber()
     @IsPositive()
     processCheckInterval!: number;
+
+    // ms
+    @IsNumber()
+    @IsPositive()
+    flexibleTime!: number;
 }

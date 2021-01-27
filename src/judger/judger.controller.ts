@@ -13,7 +13,12 @@ import { RedisService } from "src/redis/redis.service";
 import { JudgerGateway } from "./judger.gateway";
 import { GetToken } from "./dto/judger.dto";
 import { AcquireTokenOutput, ErrorInfo } from "./dto/http";
-import { OnlineToken } from "./judger.decl";
+import {
+    ClosedToken,
+    DisabledToken,
+    JudgerLogSuf,
+    OnlineToken
+} from "./judger.decl";
 
 @Controller("judger")
 export class JudgerController {
@@ -61,7 +66,7 @@ export class JudgerController {
     }
 
     // 测试分发任务
-    @Post("task/:taskId/:wsId")
+    @Post("task/:wsId/:taskId")
     async testJudgeRequest(
         @Param("taskId") taskId: string,
         @Param("wsId") wsId: string
@@ -70,9 +75,43 @@ export class JudgerController {
         return await this.judgerGateway.distributTask(wsId, taskId);
     }
 
-    @Get("onlinetoken")
-    async getAllToken(): Promise<string[]> {
-        return await this.redisService.client.hkeys(OnlineToken);
+    // 测试 Exit
+    @Post("exit/:wsId")
+    async testExit(
+        @Param("taskId") taskId: string,
+        @Param("wsId") wsId: string
+    ): Promise<void> {
+        return await this.judgerGateway.callExit(wsId, {
+            reboot: false,
+            reason: "管理员手动操作"
+        });
+    }
+
+    // 测试 Close
+    @Post("close/:wsId")
+    async testClose(
+        @Param("taskId") taskId: string,
+        @Param("wsId") wsId: string
+    ): Promise<void> {
+        return await this.judgerGateway.forceDisconnect(wsId, "管理员主动断开");
+    }
+
+    @Get("log/:wsId")
+    async getLog(@Param("wsId") wsId: string): Promise<string[]> {
+        return await this.redisService.client.lrange(
+            wsId + JudgerLogSuf,
+            0,
+            10000
+        );
+    }
+
+    @Get("alltoken")
+    async getAllToken(): Promise<{ [key: string]: string[] }> {
+        return {
+            online: await this.redisService.client.hkeys(OnlineToken),
+            disabled: await this.redisService.client.hkeys(DisabledToken),
+            closed: await this.redisService.client.hkeys(ClosedToken)
+        };
     }
 
     /**
