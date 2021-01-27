@@ -68,14 +68,14 @@ axios
             );
         });
         setInterval(() => {
-            if (JSON.stringify(status) !== "[]") {
+            if (status.length !== 0) {
                 ws.send(
                     JSON.stringify({
                         seq: 100,
                         type: "req",
                         body: {
                             method: "UpdateJudges",
-                            args: Array.from(status)
+                            args: status.splice(0)
                         }
                     })
                 );
@@ -84,18 +84,17 @@ axios
         }, 1000);
 
         setInterval(() => {
-            if (JSON.stringify(result) !== "[]") {
+            if (result.length !== 0) {
                 ws.send(
                     JSON.stringify({
                         seq: 100,
                         type: "req",
                         body: {
                             method: "FinishJudges",
-                            args: Array.from(result)
+                            args: result.splice(0)
                         }
                     })
                 );
-                result = [];
             }
         }, 1000);
     });
