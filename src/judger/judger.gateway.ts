@@ -116,6 +116,7 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
             }
         );
 
+        // FIXME
         this.methods.set(
             "UpdateJudges",
             async (ws: WebSocket, wsId: string, args: UpdateJudgesArgs) => {
@@ -124,13 +125,17 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
                     mu = mu.sismember(wsId + WsOwnTaskSuf, id);
                 });
                 const ret: number[] = (await mu.exec()).map(value => value[1]);
-                const vaildResult = args.filter(({}, index) => ret[index]);
+                const e: string[] = [];
+                const vaildResult = args.filter(({ id }, index) => {
+                    if (!ret[index]) e.push(id);
+                    return ret[index];
+                });
                 // FIXME 留作 DEBUG，一般出现此错误说明有 BUG
                 if (args.length > vaildResult.length)
                     this.log(
                         wsId,
                         `回报无效任务状态 ${args.length -
-                            vaildResult.length} 个`
+                            vaildResult.length} 个，为：${e.join("|")}`
                     );
                 // TODO 通知外部系统
             }
@@ -186,6 +191,13 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
                     );
                     if (!resTuple) continue;
                     const res: Response = JSON.parse(resTuple[1]);
+                    // FIXME
+                    if (Date.now() - +res.time > 50) {
+                        await this.redisService.client.lpush(
+                            process.pid + ":ProcessLog",
+                            `进程取出 Res 超时：${Date.now() - +res.time}`
+                        );
+                    }
                     const record = this.callRecord.get(res.seq);
                     if (!record) throw new Error("callRecord 记录丢失");
                     record.cb(res.body);
@@ -314,18 +326,20 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
         });
 
         // FIXME 粗暴的压测
-        // const timer = setInterval(() => {
-        //     if (client.readyState === WebSocket.OPEN) {
-        //         this.distributeTask(
-        //             token,
-        //             Math.random()
-        //                 .toString(35)
-        //                 .slice(2)
-        //         );
-        //     } else {
-        //         clearInterval(timer);
-        //     }
-        // }, 10);
+        const timer = setInterval(() => {
+            if (client.readyState === WebSocket.OPEN) {
+                this.distributeTask(
+                    token,
+                    String(Date.now()) +
+                        "-" +
+                        Math.random()
+                            .toString(35)
+                            .slice(-2)
+                );
+            } else {
+                clearInterval(timer);
+            }
+        }, 10);
     }
 
     // 目前未使用
@@ -429,8 +443,13 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
         if (!(await this.redisService.client.hexists(OnlineToken, wsId))) {
             throw new Error("Judger 不可用");
         }
+        const a = Date.now();
         await this.callJudge(wsId, taskId);
         await this.redisService.client.sadd(wsId + WsOwnTaskSuf, taskId);
+        const b = Date.now();
+        // FIXME
+        if (b - a >= 200)
+            await this.log(wsId, `发送任务：${taskId} 超时：${b - a}`);
     }
 
     /**
@@ -573,6 +592,13 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
                         ws.close(1000, msg.closeReason);
                         continue;
                     }
+                    // FIXME
+                    if (Date.now() - +msg.req.time > 50) {
+                        this.log(
+                            wsId,
+                            `评测机取出消息超时 ${Date.now() - +msg.req.time}`
+                        );
+                    }
                     const seq = (wsSeq = wsSeq + 1);
                     this.wsRepRecord.set(wsId + seq, {
                         pid: msg.pid,
@@ -617,6 +643,8 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
                     throw new Error(e);
                 }
                 wsMsg.seq = record.seq;
+                // FIXME
+                wsMsg.time = String(Date.now());
                 await this.redisService.client.lpush(
                     record.pid + ResQueueSuf,
                     JSON.stringify(wsMsg)
@@ -713,7 +741,7 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
     private async log(wsId: string, msg: string): Promise<void> {
         await this.redisService.client.lpush(
             wsId + JudgerLogSuf,
-            `${moment().format("YYYY-MM-DDTHH:mm:ssZ")} ${msg}`
+            `${moment().format("YYYY-MM-DDTHH:mm:ssZ")} ${Date.now()} ${msg}`
         );
         this.logger.warn(`评测机 ${wsId.split(".")[0]}: ${msg}`);
     }
@@ -770,7 +798,9 @@ export class JudgerGateway implements OnGatewayInit, OnGatewayConnection {
             this.callRecord.set(seq, c);
             const req: Request<JudgerMethod, JudgerArgs> = {
                 type: "req",
-                time: moment().format("YYYY-MM-DDTHH:mm:ssZ"),
+                // FIXME
+                // time: moment().format("YYYY-MM-DDTHH:mm:ssZ"),
+                time: String(Date.now()),
                 seq: seq,
                 body: body
             };
