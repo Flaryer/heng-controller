@@ -10,9 +10,9 @@ export const ProcessOwnWsSuf = ":ProcessWs"; // set
 export const WsOwnTaskSuf = ":WsTask"; // set
 
 export const AllToken = "AllToken"; // hash
-// export const LifePing = "LifePing"; // hash
 export const AllReport = "JudgerReport"; // hash
 export const JudgerLogSuf = ":JudgerLog"; // list
+
 export const UnusedToken = "UnusedToken"; // hash
 export const OnlineToken = "OnlineToken"; // hash
 export const DisabledToken = "DisablesToken"; // hash
